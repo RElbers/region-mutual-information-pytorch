@@ -2,6 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+__all__ = [
+    'RMILoss',
+    'rmi_loss'
+]
 EPSILON = 0.0005
 
 
@@ -107,7 +111,7 @@ def extract_region_vectors(pred, target, radius):
     return y, p
 
 
-def rmi_loss(pred, target, radius=3, use_log_trace=False,use_double_precision=True, epsilon=EPSILON):
+def rmi_loss(pred, target, radius=3, use_log_trace=False, use_double_precision=True, epsilon=EPSILON):
     """
     Calculates the RMI loss between the prediction and target.
 
@@ -169,9 +173,9 @@ def inverse(x):
 
 
 def log_trace(x, epsilon=EPSILON):
-    diag = torch.diagonal(x, dim1=-2, dim2=-1) + epsilon
-    return 2.0 * torch.sum(torch.log(diag), dim=-1)
+    diag = torch.diagonal(x, dim1=-2, dim2=-1)
+    return torch.sum(torch.log(diag + epsilon), dim=-1)
 
 
 def log_det(x):
-    return 2.0 * torch.logdet(x)
+    return torch.logdet(x)
