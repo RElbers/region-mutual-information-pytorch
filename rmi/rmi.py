@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-EPSILON = 0.0005
+EPSILON = 0.00001
 
 
 class RMILoss(nn.Module):
@@ -11,7 +11,7 @@ class RMILoss(nn.Module):
     """
 
     def __init__(self,
-                 from_logits=True,
+                 with_logits,
                  radius=3,
                  bce_weight=0.5,
                  pool='avg',
@@ -20,7 +20,7 @@ class RMILoss(nn.Module):
                  use_double_precision=True,
                  epsilon=EPSILON):
         """
-        :param from_logits: If True, apply the sigmoid function to the prediction before calculating loss.
+        :param with_logits: If True, apply the sigmoid function to the prediction before calculating loss.
         :param radius: RMI radius.
         :param bce_weight: Weight of the binary cross entropy. Must be between 0 and 1.
         :param pool: Pooling method used before calculating RMI. Must be one of ['avg', 'max'].
@@ -32,7 +32,7 @@ class RMILoss(nn.Module):
         super().__init__()
 
         self.use_double_precision = use_double_precision
-        self.from_logits = from_logits
+        self.with_logits = with_logits
         self.bce_weight = bce_weight
         self.stride = stride
         self.pool = pool
@@ -40,23 +40,27 @@ class RMILoss(nn.Module):
         self.use_log_trace = use_log_trace
         self.epsilon = epsilon
 
-    def forward(self, pred, target):
-        if self.from_logits:
-            pred = torch.sigmoid(pred)
-
+    def forward(self, input, target):
         # Calculate BCE if needed
         if self.bce_weight != 0:
-            bce = F.binary_cross_entropy(pred, target=target, reduction='mean')
+            if self.with_logits:
+                bce = F.binary_cross_entropy_with_logits(input, target=target)
+            else:
+                bce = F.binary_cross_entropy(input, target=target)
             bce = bce.mean() * self.bce_weight
         else:
             bce = 0.0
 
+        # Apply sigmoid to get probabilities. See final paragraph of section 4.
+        if self.with_logits:
+            input = torch.sigmoid(input)
+
         # Downscale tensors before RMI
-        pred = self.downscale(pred)
+        input = self.downscale(input)
         target = self.downscale(target)
 
         # Calculate RMI loss
-        rmi = self.rmi_loss(pred=pred, target=target)
+        rmi = self.rmi_loss(pred=input, target=target)
         rmi = rmi.mean() * (1.0 - self.bce_weight)
         return rmi + bce
 
