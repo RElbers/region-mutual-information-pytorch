@@ -46,6 +46,7 @@ The prediction is interpolated with the target by: `input_i = (1 - α) * input +
 ![loss](imgs/loss.png)
 
 Difference between this implementation and the implementation in the official git [repository](https://github.com/ZJULearning/RMI), with `EPSILON = 0.0005` and `pool='max'`.
+
 ![diff](imgs/diff.png)
 
 Execution time on tensors with batch size of 8 and with 21 classes.  
