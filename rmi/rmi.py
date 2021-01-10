@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-EPSILON = 0.00001
+EPSILON = 0.0005
 
 
 class RMILoss(nn.Module):
@@ -14,9 +14,9 @@ class RMILoss(nn.Module):
                  with_logits,
                  radius=3,
                  bce_weight=0.5,
-                 pool='avg',
+                 pool='max',
                  stride=3,
-                 use_log_trace=False,
+                 use_log_trace=True,
                  use_double_precision=True,
                  epsilon=EPSILON):
         """
@@ -60,7 +60,7 @@ class RMILoss(nn.Module):
         target = self.downscale(target)
 
         # Calculate RMI loss
-        rmi = self.rmi_loss(pred=input, target=target)
+        rmi = self.rmi_loss(input=input, target=target)
         rmi = rmi.mean() * (1.0 - self.bce_weight)
         return rmi + bce
 
@@ -68,33 +68,33 @@ class RMILoss(nn.Module):
         if self.stride == 1:
             return x
 
+        padding = self.stride // 2
         if self.pool == 'max':
-            return F.max_pool2d(x, kernel_size=self.stride, stride=self.stride)
+            return F.max_pool2d(x, kernel_size=self.stride, stride=self.stride, padding=padding)
         if self.pool == 'avg':
-            return F.avg_pool2d(x, kernel_size=self.stride, stride=self.stride)
+            return F.avg_pool2d(x, kernel_size=self.stride, stride=self.stride, padding=padding)
         raise ValueError(self.pool)
 
-    def rmi_loss(self, pred, target):
+    def rmi_loss(self, input, target):
         """
         Calculates the RMI loss between the prediction and target.
         :return: RMI loss
         """
 
-        assert pred.shape == target.shape
+        assert input.shape == target.shape
+        vector_size = self.radius * self.radius
 
         # Convert to doubles for better precision
         if self.use_double_precision:
-            pred = pred.double()
+            input = input.double()
             target = target.double()
 
-        vector_size = self.radius * self.radius
-
         # Small diagonal matrix to fix numerical issues
-        eps = torch.eye(vector_size).type_as(pred) * self.epsilon
+        eps = torch.eye(vector_size, dtype=input.dtype, device=input.device) * self.epsilon
         eps = eps.unsqueeze(dim=0).unsqueeze(dim=0)
 
         # Get region vectors
-        y, p = extract_region_vectors(pred, target, radius=self.radius)
+        y, p = extract_region_vectors(input, target, radius=self.radius)
 
         # Subtract mean
         y = y - y.mean(dim=3, keepdim=True)
@@ -121,12 +121,12 @@ class RMILoss(nn.Module):
         return rmi.sum(dim=1).mean(dim=0)
 
 
-def extract_region_vectors(pred, target, radius):
+def extract_region_vectors(input, target, radius):
     """
     Extracts square regions from the pred and target tensors.
     Returns the flattened vectors of length radius*radius.
 
-    :param pred: Prediction Tensor with shape (b, c, h, w).
+    :param input: Input Tensor with shape (b, c, h, w).
     :param target: Target Tensor with shape (b, c, h, w).
     :param radius: RMI radius.
     :return: Pair of flattened extracted regions for the prediction and target both with shape (b, c, radius * radius, n), where n is the number of regions.
@@ -139,7 +139,7 @@ def extract_region_vectors(pred, target, radius):
     for y in range(0, radius):
         for x in range(0, radius):
             y_current = target[:, :, y:y + new_h, x:x + new_w]
-            p_current = pred[:, :, y:y + new_h, x:x + new_w]
+            p_current = input[:, :, y:y + new_h, x:x + new_w]
             y_regions.append(y_current)
             p_regions.append(p_current)
 
@@ -160,9 +160,10 @@ def inverse(x):
     return torch.inverse(x)
 
 
-def log_trace(x, epsilon=EPSILON):
+def log_trace(x):
+    x = torch.cholesky(x)
     diag = torch.diagonal(x, dim1=-2, dim2=-1)
-    return torch.sum(torch.log(diag + epsilon), dim=-1)
+    return 2 * torch.sum(torch.log(diag + 1e-8), dim=-1)
 
 
 def log_det(x):
