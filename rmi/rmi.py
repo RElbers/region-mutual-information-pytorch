@@ -14,20 +14,29 @@ class RMILoss(nn.Module):
                  with_logits,
                  radius=3,
                  bce_weight=0.5,
-                 pool='max',
+                 downsampling_method='max',
                  stride=3,
                  use_log_trace=True,
                  use_double_precision=True,
                  epsilon=EPSILON):
         """
-        :param with_logits: If True, apply the sigmoid function to the prediction before calculating loss.
-        :param radius: RMI radius.
-        :param bce_weight: Weight of the binary cross entropy. Must be between 0 and 1.
-        :param pool: Pooling method used before calculating RMI. Must be one of ['avg', 'max'].
-        :param stride: Stride used in the pooling layer.
-        :param use_log_trace: Whether to calculate the log of the trace, instead of the log of the determinant. See equation (15).
-        :param use_double_precision: Calculate the RMI using doubles in order to fix potential numerical issues.
-        :param epsilon: Magnitude of the entries added to the diagonal of M in order to fix potential numerical issues.
+        :param with_logits:
+            If True, apply the sigmoid function to the prediction before calculating loss.
+        :param radius:
+            RMI radius.
+        :param bce_weight:
+            Weight of the binary cross entropy. Must be between 0 and 1.
+        :param downsampling_method:
+            Downsampling method used before calculating RMI. Must be one of ['avg', 'max', 'region-extraction'].
+            If 'region-extraction', then downscaling is done during the region extraction phase. Meaning that the stride is the spacing between consecutive regions.
+        :param stride:
+            Stride used for downsampling.
+        :param use_log_trace:
+            Whether to calculate the log of the trace, instead of the log of the determinant. See equation (15).
+        :param use_double_precision:
+            Calculate the RMI using doubles in order to fix potential numerical issues.
+        :param epsilon:
+            Magnitude of the entries added to the diagonal of M in order to fix potential numerical issues.
         """
         super().__init__()
 
@@ -35,7 +44,7 @@ class RMILoss(nn.Module):
         self.with_logits = with_logits
         self.bce_weight = bce_weight
         self.stride = stride
-        self.pool = pool
+        self.downsampling_method = downsampling_method
         self.radius = radius
         self.use_log_trace = use_log_trace
         self.epsilon = epsilon
@@ -55,46 +64,34 @@ class RMILoss(nn.Module):
         if self.with_logits:
             input = torch.sigmoid(input)
 
-        # Downscale tensors before RMI
-        input = self.downscale(input)
-        target = self.downscale(target)
-
         # Calculate RMI loss
         rmi = self.rmi_loss(input=input, target=target)
         rmi = rmi.mean() * (1.0 - self.bce_weight)
         return rmi + bce
 
-    def downscale(self, x):
-        if self.stride == 1:
-            return x
-
-        padding = self.stride // 2
-        if self.pool == 'max':
-            return F.max_pool2d(x, kernel_size=self.stride, stride=self.stride, padding=padding)
-        if self.pool == 'avg':
-            return F.avg_pool2d(x, kernel_size=self.stride, stride=self.stride, padding=padding)
-        raise ValueError(self.pool)
-
     def rmi_loss(self, input, target):
         """
         Calculates the RMI loss between the prediction and target.
-        :return: RMI loss
+
+        :return:
+            RMI loss
         """
 
         assert input.shape == target.shape
         vector_size = self.radius * self.radius
 
+        # Get region vectors
+        y = self.extract_region_vector(target)
+        p = self.extract_region_vector(input)
+
         # Convert to doubles for better precision
         if self.use_double_precision:
-            input = input.double()
-            target = target.double()
+            y = y.double()
+            p = p.double()
 
         # Small diagonal matrix to fix numerical issues
-        eps = torch.eye(vector_size, dtype=input.dtype, device=input.device) * self.epsilon
+        eps = torch.eye(vector_size, dtype=y.dtype, device=y.device) * self.epsilon
         eps = eps.unsqueeze(dim=0).unsqueeze(dim=0)
-
-        # Get region vectors
-        y, p = extract_region_vectors(input, target, radius=self.radius)
 
         # Subtract mean
         y = y - y.mean(dim=3, keepdim=True)
@@ -120,36 +117,34 @@ class RMILoss(nn.Module):
         # Sum over classes, mean over samples.
         return rmi.sum(dim=1).mean(dim=0)
 
+    def extract_region_vector(self, x):
+        """
+        Downsamples and extracts square regions from x.
+        Returns the flattened vectors of length radius*radius.
+        """
 
-def extract_region_vectors(input, target, radius):
-    """
-    Extracts square regions from the pred and target tensors.
-    Returns the flattened vectors of length radius*radius.
+        x = self.downsample(x)
+        stride = self.stride if self.downsampling_method == 'region-extraction' else 1
 
-    :param input: Input Tensor with shape (b, c, h, w).
-    :param target: Target Tensor with shape (b, c, h, w).
-    :param radius: RMI radius.
-    :return: Pair of flattened extracted regions for the prediction and target both with shape (b, c, radius * radius, n), where n is the number of regions.
-    """
+        x_regions = F.unfold(x, kernel_size=self.radius, stride=stride)
+        x_regions = x_regions.view((*x.shape[:2], self.radius ** 2, -1))
+        return x_regions
 
-    h, w = target.shape[2], target.shape[3]
-    new_h, new_w = h - (radius - 1), w - (radius - 1)
-    y_regions, p_regions = [], []
+    def downsample(self, x):
+        # Skip if stride is 1
+        if self.stride == 1:
+            return x
 
-    for y in range(0, radius):
-        for x in range(0, radius):
-            y_current = target[:, :, y:y + new_h, x:x + new_w]
-            p_current = input[:, :, y:y + new_h, x:x + new_w]
-            y_regions.append(y_current)
-            p_regions.append(p_current)
+        # Skip if we pool during region extraction.
+        if self.downsampling_method == 'region-extraction':
+            return x
 
-    y_regions = torch.stack(y_regions, dim=2)
-    p_regions = torch.stack(p_regions, dim=2)
-
-    # Flatten
-    y = y_regions.view((*y_regions.shape[:-2], -1))
-    p = p_regions.view((*p_regions.shape[:-2], -1))
-    return y, p
+        padding = self.stride // 2
+        if self.downsampling_method == 'max':
+            return F.max_pool2d(x, kernel_size=self.stride, stride=self.stride, padding=padding)
+        if self.downsampling_method == 'avg':
+            return F.avg_pool2d(x, kernel_size=self.stride, stride=self.stride, padding=padding)
+        raise ValueError(self.downsampling_method)
 
 
 def transpose(x):
