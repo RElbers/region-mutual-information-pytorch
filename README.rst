@@ -17,7 +17,7 @@ With logits:
     loss = RMILoss(with_logits=True)
 
     batch_size, classes, height, width = 5, 4, 64, 64
-    pred = torch.rand(batch_size, classes, height, width, requires_grad=True)
+    pred = torch.randn(batch_size, classes, height, width, requires_grad=True)
     target = torch.empty(batch_size, classes, height, width).random_(2)
 
     output = loss(pred, target)
@@ -35,7 +35,7 @@ With probabilities:
     loss = RMILoss(with_logits=False)
 
     batch_size, classes, height, width = 5, 4, 64, 64
-    pred = torch.randn(batch_size, classes, height, width, requires_grad=True)
+    pred = torch.rand(batch_size, classes, height, width, requires_grad=True)
     target = torch.empty(batch_size, classes, height, width).random_(2)
 
     output = loss(m(pred), target)
