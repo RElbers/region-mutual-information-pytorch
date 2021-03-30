@@ -1,9 +1,16 @@
 Region Mutual Information loss
 ==============================
 
-PyTorch implementation of the `Region Mutual Information Loss for
-Semantic Segmentation <https://arxiv.org/abs/1910.12037>`__.
+PyTorch implementation of the `Region Mutual Information Loss for Semantic Segmentation <https://arxiv.org/abs/1910.12037>`__.
 The purpose of this repository is to provide a faithful and relatively simple implementation of just the RMI loss.
+
+This package is `available on PyPI <https://pypi.org/project/rmi-pytorch/>`__ and can be installed via:
+
+.. code::
+
+    pip install rmi-pytorch
+
+
 
 Example usage
 -------------
