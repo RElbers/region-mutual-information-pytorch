@@ -156,7 +156,7 @@ def inverse(x):
 
 
 def log_trace(x):
-    x = torch.cholesky(x)
+    x = torch.linalg.cholesky(x)
     diag = torch.diagonal(x, dim1=-2, dim2=-1)
     return 2 * torch.sum(torch.log(diag + 1e-8), dim=-1)
 
